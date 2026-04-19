@@ -7,7 +7,7 @@
  * Output: DocIngestionOutput (vectorIds[], vectorCount, registryEntry, status)
  *
  * ZERO LLM CALLS — pure deterministic processing pipeline.
- * TODO: implement nodes under src/nodes/ per PRD.md
+ * Implementation tracked in GitHub issues — see repo Issues tab.
  */
 
 import { StateGraph, START, END, MemorySaver, StateSchema, UntrackedValue } from '@langchain/langgraph';
@@ -43,13 +43,12 @@ const IngestionState = new StateSchema({
 
 const standardRetry = { maxAttempts: 3, initialInterval: 1000, backoffFactor: 2 };
 
-// TODO: replace stubs with real implementations
-const extractTextNode        = async (s: any) => ({ phase: 'extract-text', rawText: '', detectedFormat: 'unknown' });
-const detectStructureNode    = async (s: any) => ({ phase: 'detect-structure', structureProfile: {}, chunkingStrategy: 'fixed' as const });
-const chunkDocumentNode      = async (s: any) => ({ phase: 'chunk-document', chunks: [] });
-const generateEmbeddingsNode = async (s: any) => ({ phase: 'generate-embeddings', embeddedChunks: [] });
-const writeS3VectorsNode     = async (s: any) => ({ phase: 'write-s3-vectors', vectorIds: [], vectorCount: 0 });
-const registerDynamoDBNode   = async (s: any) => ({ phase: 'register-dynamodb', registryEntry: {}, status: 'indexed' });
+import { extractTextNode }        from './nodes/extractText.js';
+import { detectStructureNode }    from './nodes/detectStructure.js';
+import { chunkDocumentNode }      from './nodes/chunkDocument.js';
+import { generateEmbeddingsNode } from './nodes/generateEmbeddings.js';
+import { writeS3VectorsNode }     from './nodes/writeS3Vectors.js';
+import { registerDynamoDBNode }   from './nodes/registerDynamoDB.js';
 
 function assembleGraph(checkpointer?: MemorySaver) {
   const builder = new StateGraph(IngestionState)
