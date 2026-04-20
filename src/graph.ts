@@ -35,6 +35,7 @@ const IngestionState = new StateSchema({
   embeddedChunks:    lastValue(z.array(z.any()).default(() => [])),
   vectorIds:         lastValue(z.array(z.string()).default(() => [])),
   vectorCount:       lastValue(z.number().default(0)),
+  docId:             lastValue(z.string().optional()),
   registryEntry:     lastValue(z.any().optional()),
   status:            lastValue(z.string().default('processing')),
   error:             lastValue(z.string().optional()),

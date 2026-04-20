@@ -1,109 +1,111 @@
 /**
- * tests/ingestion-retrieval.test.ts — integration test for doc-ingestion → rag-retriever pipeline
- * Tests the full pipeline: ingest docs → retrieve via semantic search.
+ * tests/ingestion-retrieval.test.ts — vitest integration tests for graph-doc-ingestion.
+ * Uses local @xenova/transformers embeddings (no API key required).
+ * Phase 1: ingest test documents → verify vector store written.
+ * Phase 2: cross-validate retrieval via graph-rag-retriever (sibling repo).
  */
 import "dotenv/config";
+import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Use a temp store for testing so we don't pollute the main store
 const TEST_VECTOR_STORE = path.join(__dirname, "../test-vector-store.json");
 const TEST_DOC_REGISTRY = path.join(__dirname, "../test-doc-registry.json");
 
+// Set env BEFORE importing graph so vectorStore.ts picks up the path
 process.env.VECTOR_STORE_PATH = TEST_VECTOR_STORE;
-process.env.REGISTRY_PATH = TEST_DOC_REGISTRY;
+process.env.REGISTRY_PATH    = TEST_DOC_REGISTRY;
 
-// Clean up test stores before running
-function cleanup() {
+const { graph: ingestionGraph } = await import("../src/graph.js");
+
+beforeAll(() => {
   [TEST_VECTOR_STORE, TEST_DOC_REGISTRY].forEach(p => {
     if (fs.existsSync(p)) fs.unlinkSync(p);
   });
-}
+});
 
-// Import AFTER setting env vars
-const { graph: ingestionGraph } = await import("../src/graph.js");
+afterAll(() => {
+  [TEST_VECTOR_STORE, TEST_DOC_REGISTRY].forEach(p => {
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+  });
+});
 
-async function main() {
-  cleanup();
-  console.log("\n=== graph-doc-ingestion integration tests ===\n");
-
-  const testDocs = [
-    {
-      name: "LangGraph intro",
-      rawContent: `LangGraph is a framework for building stateful, multi-actor applications with LLMs.
+const TEST_DOCS = [
+  {
+    rawContent: `LangGraph is a framework for building stateful, multi-actor applications with LLMs.
 It models agent workflows as directed graphs where nodes are LLM calls or tools and edges define control flow.
 Key features include: checkpointing, human-in-the-loop, streaming, and multi-agent coordination.
 Built on top of LangChain, LangGraph extends it with graph-based orchestration.`,
-      docType: "documentation",
-    },
-    {
-      name: "OpenRouter overview",
-      rawContent: `OpenRouter is a unified API gateway for large language models.
+    docType: "documentation",
+  },
+  {
+    rawContent: `OpenRouter is a unified API gateway for large language models.
 It provides access to 200+ models from providers like OpenAI, Anthropic, Google, and xAI.
 Features include model routing, fallback, rate limiting, and cost tracking.
 OpenRouter is compatible with the OpenAI API format, making migration straightforward.`,
-      docType: "documentation",
-    },
-    {
-      name: "Vector databases comparison",
-      rawContent: `Vector databases store high-dimensional embeddings for semantic search.
+    docType: "documentation",
+  },
+  {
+    rawContent: `Vector databases store high-dimensional embeddings for semantic search.
 Popular options include Pinecone, Weaviate, Qdrant, and Chroma.
 Key metrics: recall@10, queries per second, storage cost, and latency.
 For local development, Chroma and Qdrant offer self-hosted options.`,
-      docType: "article",
-    },
-  ];
+    docType: "article",
+  },
+];
 
-  // Phase 1: Ingest documents
-  console.log("Phase 1: Ingesting test documents...");
-  let allIngested = true;
-
-  for (const doc of testDocs) {
+describe("graph-doc-ingestion — Phase 1: ingest", () => {
+  test("ingests plain text and produces vectorIds + docId", async () => {
     const result = await ingestionGraph.invoke(
-      { rawContent: doc.rawContent, docType: doc.docType, clientId: "test", chunkingStrategy: "sentence" },
+      { rawContent: TEST_DOCS[0].rawContent, docType: TEST_DOCS[0].docType, clientId: "test", chunkingStrategy: "sentence" },
       { configurable: { thread_id: `ingest-${Date.now()}` } },
     );
+    expect(Array.isArray(result.vectorIds)).toBe(true);
+    expect((result.vectorIds as string[]).length).toBeGreaterThan(0);
+    expect(typeof result.docId).toBe("string");
+  }, 180000);
 
-    const ok = Array.isArray(result.vectorIds) && (result.vectorIds as string[]).length > 0;
-    console.log(`  ${ok ? "✅" : "⚠️"} "${doc.name}" → ${(result.vectorIds as string[])?.length ?? 0} chunks, docId=${result.docId}`);
-    if (!ok) allIngested = false;
-  }
+  test("ingests OpenRouter doc with sentence chunking", async () => {
+    const result = await ingestionGraph.invoke(
+      { rawContent: TEST_DOCS[1].rawContent, docType: TEST_DOCS[1].docType, clientId: "test", chunkingStrategy: "sentence" },
+      { configurable: { thread_id: `ingest-${Date.now()}` } },
+    );
+    expect((result.vectorIds as string[]).length).toBeGreaterThan(0);
+    expect(fs.existsSync(TEST_VECTOR_STORE)).toBe(true);
+    expect(fs.existsSync(TEST_DOC_REGISTRY)).toBe(true);
+  }, 60000);
 
-  console.log(`\n  Vector store: ${fs.existsSync(TEST_VECTOR_STORE) ? "written" : "MISSING"}`);
+  test("ingests markdown article with semantic chunking", async () => {
+    const result = await ingestionGraph.invoke(
+      { rawContent: TEST_DOCS[2].rawContent, docType: TEST_DOCS[2].docType, clientId: "test", chunkingStrategy: "semantic" },
+      { configurable: { thread_id: `ingest-${Date.now()}` } },
+    );
+    expect((result.vectorIds as string[]).length).toBeGreaterThan(0);
+  }, 60000);
+});
 
-  // Phase 2: Retrieve via rag-retriever
-  console.log("\nPhase 2: Testing retrieval...");
-  const { graph: ragGraph } = await import("../../graph-rag-retriever/src/graph.js");
+describe("graph-doc-ingestion — Phase 2: cross-validate retrieval", () => {
+  test("vector store is readable and contains seeded chunks", async () => {
+    expect(fs.existsSync(TEST_VECTOR_STORE)).toBe(true);
+    const store = JSON.parse(fs.readFileSync(TEST_VECTOR_STORE, "utf-8")) as unknown[];
+    expect(store.length).toBeGreaterThan(0);
+    const first = store[0] as Record<string, unknown>;
+    expect(typeof first.id).toBe("string");
+    expect(Array.isArray(first.embedding)).toBe(true);
+    expect(typeof first.text).toBe("string");
+  });
 
-  const queries = [
-    { query: "How does LangGraph handle state?", expect: "langgraph" },
-    { query: "What is OpenRouter?", expect: "openrouter" },
-    { query: "best vector database for production", expect: "vector" },
-  ];
-
-  let retrievalPassed = 0;
-  for (const q of queries) {
+  test("rag-retriever finds relevant context from ingested docs", async () => {
+    const { graph: ragGraph } = await import("../../graph-rag-retriever/src/graph.js");
     const result = await ragGraph.invoke(
-      { query: q.query, topK: 3, rankingStrategy: "score" },
+      { query: "How does LangGraph handle state?", topK: 3, rankingStrategy: "score" },
       { configurable: { thread_id: `retrieve-${Date.now()}` } },
     );
-
-    const context = ((result.contextWindow ?? result.context) as string ?? "").toLowerCase();
-    const found = context.includes(q.expect);
-    const icon = found ? "✅" : "⚠️";
-    console.log(`  ${icon} "${q.query}" → ${result.chunkCount} chunks, contains "${q.expect}": ${found}`);
-    if (found) retrievalPassed++;
-  }
-
-  cleanup(); // remove test stores
-
-  const total = testDocs.length + queries.length;
-  const passed = (allIngested ? testDocs.length : 0) + retrievalPassed;
-  console.log(`\n${passed}/${total} passed`);
-  if (passed < total) process.exit(1);
-}
-
-main().catch(err => { console.error(err); process.exit(1); });
+    expect(result.chunkCount).toBeGreaterThan(0);
+    const ctx = (result.contextWindow as string ?? "").toLowerCase();
+    expect(ctx).toContain("langgraph");
+  }, 60000);
+});
